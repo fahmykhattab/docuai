@@ -39,7 +39,7 @@
 
 ```bash
 # Clone or download the project
-git clone https://github.com/yourusername/docuai.git
+git clone https://github.com/fahmykhattab/docuai.git
 cd docuai
 
 # Run the installer as root
@@ -63,7 +63,7 @@ If you prefer manual setup:
 ### 1. Clone and Configure
 
 ```bash
-git clone https://github.com/yourusername/docuai.git /opt/docuai
+git clone https://github.com/fahmykhattab/docuai.git /opt/docuai
 cd /opt/docuai
 ```
 
