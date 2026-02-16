@@ -1,0 +1,170 @@
+version: "3.9"
+
+# DocuAI - Portainer Stack Deployment
+# Deploy via Portainer > Stacks > Add Stack > Upload or paste this file
+# Make sure to set the environment variables in Portainer's stack environment section
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: docuai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-docuai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-docuai}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docuai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - docuai
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "portainer.stack.name=docuai"
+      - "portainer.stack.service=postgres"
+
+  redis:
+    image: redis:7-alpine
+    container_name: docuai-redis
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - docuai
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "portainer.stack.name=docuai"
+      - "portainer.stack.service=redis"
+
+  backend:
+    image: ${DOCUAI_REGISTRY:-docuai}/backend:${DOCUAI_VERSION:-latest}
+    container_name: docuai-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-docuai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-docuai}
+      SYNC_DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-docuai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-docuai}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-minicpm-v}
+      SECRET_KEY: ${SECRET_KEY}
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-50}
+      OCR_LANGUAGE: ${OCR_LANGUAGE:-deu+eng+ara}
+    volumes:
+      - docuai_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - docuai
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "portainer.stack.name=docuai"
+      - "portainer.stack.service=backend"
+
+  worker:
+    image: ${DOCUAI_REGISTRY:-docuai}/backend:${DOCUAI_VERSION:-latest}
+    container_name: docuai-worker
+    restart: unless-stopped
+    command: celery -A celery_app worker --loglevel=info --concurrency=2
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-docuai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-docuai}
+      SYNC_DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-docuai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-docuai}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-minicpm-v}
+      SECRET_KEY: ${SECRET_KEY}
+      OCR_LANGUAGE: ${OCR_LANGUAGE:-deu+eng+ara}
+    volumes:
+      - docuai_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - docuai
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "portainer.stack.name=docuai"
+      - "portainer.stack.service=worker"
+
+  watcher:
+    image: ${DOCUAI_REGISTRY:-docuai}/backend:${DOCUAI_VERSION:-latest}
+    container_name: docuai-watcher
+    restart: unless-stopped
+    command: python -m app.services.watcher
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-docuai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-docuai}
+      SYNC_DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-docuai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-docuai}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-minicpm-v}
+      SECRET_KEY: ${SECRET_KEY}
+    volumes:
+      - docuai_data:/data
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - docuai
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "portainer.stack.name=docuai"
+      - "portainer.stack.service=watcher"
+
+  frontend:
+    image: ${DOCUAI_REGISTRY:-docuai}/frontend:${DOCUAI_VERSION:-latest}
+    container_name: docuai-frontend
+    restart: unless-stopped
+    ports:
+      - "${UI_PORT:-3000}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - docuai
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "portainer.stack.name=docuai"
+      - "portainer.stack.service=frontend"
+      - "traefik.enable=true"
+      - "traefik.http.routers.docuai.rule=Host(`${DOCUAI_DOMAIN:-docuai.local}`)"
+      - "traefik.http.routers.docuai.entrypoints=websecure"
+      - "traefik.http.routers.docuai.tls.certresolver=letsencrypt"
+      - "traefik.http.services.docuai.loadbalancer.server.port=80"
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+  docuai_data:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${DOCUAI_DATA_PATH:-/opt/docuai/data}
+      o: bind
+
+networks:
+  docuai:
+    driver: bridge

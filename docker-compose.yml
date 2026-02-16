@@ -1,0 +1,135 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-docuai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-docuai}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docuai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - docuai
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - docuai
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-docuai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-docuai}
+      SYNC_DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-docuai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-docuai}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_URL: ${OLLAMA_URL:-http://192.168.178.38:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3-vl:235b-cloud}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-qwen3-vl:235b-cloud}
+      SECRET_KEY: ${SECRET_KEY}
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-50}
+      OCR_LANGUAGE: ${OCR_LANGUAGE:-deu+eng+ara}
+    volumes:
+      - docuai_data:/data
+      - ./data/consume:/data/consume
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
+    networks:
+      - docuai
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: celery -A celery_app worker --loglevel=info --concurrency=2
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-docuai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-docuai}
+      SYNC_DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-docuai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-docuai}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_URL: ${OLLAMA_URL:-http://192.168.178.38:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3-vl:235b-cloud}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-qwen3-vl:235b-cloud}
+      SECRET_KEY: ${SECRET_KEY}
+      OCR_LANGUAGE: ${OCR_LANGUAGE:-deu+eng+ara}
+    volumes:
+      - docuai_data:/data
+      - ./data/consume:/data/consume
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - docuai
+
+  watcher:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: python -m app.services.watcher
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-docuai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-docuai}
+      SYNC_DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-docuai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-docuai}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_URL: ${OLLAMA_URL:-http://192.168.178.38:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3-vl:235b-cloud}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-qwen3-vl:235b-cloud}
+      SECRET_KEY: ${SECRET_KEY}
+    volumes:
+      - docuai_data:/data
+      - ./data/consume:/data/consume
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - docuai
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - docuai
+
+volumes:
+  pgdata:
+  redisdata:
+  docuai_data:
+
+networks:
+  docuai:
+    driver: bridge
