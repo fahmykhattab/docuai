@@ -14,11 +14,12 @@ RUN npm run build
 # Stage 2: Serve
 FROM nginx:alpine
 
-# Remove default nginx config
-RUN rm /etc/nginx/conf.d/default.conf
-
-# Copy custom nginx config
+# Copy custom nginx config (overwrite any existing)
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Remove any other default configs that might conflict
+RUN rm -f /etc/nginx/conf.d/default.conf.bak 2>/dev/null; \
+    rm -f /etc/nginx/conf.d/other.conf 2>/dev/null; true
 
 # Copy built files
 COPY --from=build /app/dist /usr/share/nginx/html
